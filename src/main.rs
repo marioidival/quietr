@@ -13,12 +13,12 @@ use ratatui::{
     prelude::{CrosstermBackend, Stylize, Terminal},
     style::{Color, Style},
     text::{Line, Span},
-    widgets::Paragraph,
+    widgets::{Paragraph, Wrap},
 };
 
 pub enum Mode {
-    Focus,
-    Normal,
+    Word,
+    Phrase,
 }
 
 pub struct App {
@@ -27,7 +27,7 @@ pub struct App {
 
 mod pdf;
 
-const DURATION: Duration = Duration::from_millis(60 * 1000 / 550);
+const DURATION: Duration = Duration::from_millis(60 * 1000 / 300);
 
 fn main() -> Result<()> {
     let file_path = std::env::args().nth(1).expect("No file path provided");
@@ -39,35 +39,82 @@ fn main() -> Result<()> {
     terminal.clear()?;
 
     let mut app = App { is_running: true };
+    // HACK: for while this mode could be not mutable
+    let mode = Mode::Phrase;
 
     let tree = pdf2text(file_path)?;
 
     'out: loop {
-        for (page, lines) in tree.text.iter() {
-            for line in lines.iter() {
-                for word in line.split_whitespace() {
-                    terminal.draw(|f| {
-                        let text = vec![
-                            Line::from(vec![
-                                Span::raw("Page Number: "),
-                                Span::styled(
-                                    format!("{}", page),
-                                    Style::default().fg(Color::White),
-                                ),
-                            ]),
-                            Line::from(word.to_string().bold()),
-                        ];
+        match mode {
+            Mode::Phrase => {
+                for (page, lines) in tree.text.iter().skip(128) {
+                    for line in lines.iter() {
+                        for phrase in line.split_inclusive('.') {
+                            terminal.draw(|f| {
+                                let text = vec![
+                                    Line::from(vec![
+                                        Span::raw("Page Number: "),
+                                        Span::styled(
+                                            format!("{}", page),
+                                            Style::default().fg(Color::White),
+                                        ),
+                                    ]),
+                                    Line::from(phrase.to_string().bold()),
+                                ];
 
-                        let size = f.size();
-                        f.render_widget(Paragraph::new(text).centered().white().on_blue(), size);
-                    })?;
+                                let size = f.size();
+                                f.render_widget(
+                                    Paragraph::new(text)
+                                        .centered()
+                                        .white()
+                                        .on_blue()
+                                        .wrap(Wrap { trim: true }),
+                                    size,
+                                );
+                            })?;
 
-                    app.is_running = process_input()?;
+                            app.is_running = process_input()?;
 
-                    std::thread::sleep(DURATION);
+                            if !app.is_running {
+                                break 'out;
+                            }
 
-                    if !app.is_running {
-                        break 'out;
+                            std::thread::sleep(DURATION * phrase.split_whitespace().count() as u32);
+                        }
+                    }
+                }
+            }
+            Mode::Word => {
+                for (page, lines) in tree.text.iter().skip(125) {
+                    for line in lines.iter() {
+                        for word in line.split_whitespace() {
+                            terminal.draw(|f| {
+                                let text = vec![
+                                    Line::from(vec![
+                                        Span::raw("Page Number: "),
+                                        Span::styled(
+                                            format!("{}", page),
+                                            Style::default().fg(Color::White),
+                                        ),
+                                    ]),
+                                    Line::from(word.to_string().bold()),
+                                ];
+
+                                let size = f.size();
+                                f.render_widget(
+                                    Paragraph::new(text).centered().white().on_blue(),
+                                    size,
+                                );
+                            })?;
+
+                            app.is_running = process_input()?;
+
+                            if !app.is_running {
+                                break 'out;
+                            }
+
+                            std::thread::sleep(DURATION);
+                        }
                     }
                 }
             }
@@ -76,6 +123,7 @@ fn main() -> Result<()> {
 
     stdout().execute(LeaveAlternateScreen)?;
     disable_raw_mode()?;
+
     Ok(())
 }
 
